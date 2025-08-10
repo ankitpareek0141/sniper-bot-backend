@@ -663,6 +663,5 @@ app.get('/getTradeLogs', (req, res) => {
     return res.json(tradeLogs);
 });
 
-app.listen(PORT, () => {
-    console.log(`Quote proxy running at http://localhost:${PORT}`);
-});
+app.listen(PORT, '0.0.0.0', () => console.log('Server running...'));
+
