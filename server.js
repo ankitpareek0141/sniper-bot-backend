@@ -5,8 +5,8 @@ import cors from 'cors';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
-dotenv.config();    
-import session from "express-session";
+dotenv.config();
+import session from 'express-session';
 import {
     Connection,
     LAMPORTS_PER_SOL,
@@ -18,6 +18,7 @@ import { config } from './config/botConfig.js';
 import { validateConfigInput } from './config/validateConfig.js';
 import { tradeStats } from './helper/tradeStats.js';
 import { isLaunchpadBlacklisted } from './helper/checkBlacklistLaunchpad.js';
+import { tradeLogs, addTradeLog } from './helper/tradeLogs.js';
 
 const app = express();
 app.use(cors());
@@ -201,7 +202,7 @@ async function fetchSwapTransaction(quote, walletPubkey, index) {
     // return await response.json();
 }
 
-async function swapToken(quoteArray, wallet, connection) {
+async function swapToken(quoteArray, wallet, connection) {  
     console.log('Buy Swap Calling...');
 
     for (let index = 0; index < quoteArray.length; index++) {
@@ -268,6 +269,20 @@ async function swapToken(quoteArray, wallet, connection) {
             // tradeStats.totalTrades++;
             tradeStats.totalBuyingAmount =
                 BigInt(tradeStats.totalBuyingAmount) + BigInt(quote.inAmount);
+
+            const buySolAmount = Number(quote.inAmount) / 10 ** 9; // lamports → SOL
+            const buyTokenAmount = Number(quote.outAmount) / 10 ** Number(token.decimals); // adjust decimals
+            const buyPrice = buySolAmount / buyTokenAmount;
+
+            // *** Record Logs ***
+            addTradeLog(
+                'BUY',
+                token.symbol,
+                token.id,
+                quote.inAmount,
+                buyPrice,
+                0
+            );
 
             // ****** Schedule Re-sell after delay (sellTimer) ******
             setTimeout(async () => {
@@ -345,6 +360,20 @@ async function swapToken(quoteArray, wallet, connection) {
                         BigInt(sellQuote.quote.outAmount);
                     tradeStats.successfulSells++;
                     tradeStats.totalTrades++;
+
+                    const sellTokenAmount  = Number(quote.inAmount) / 10 ** Number(token.decimals); // lamports → SOL
+                    const sellSolAmount = Number(quote.outAmount) / 10 ** 9; // adjust decimals
+                    const sellPrice = sellSolAmount / sellTokenAmount;
+
+                    // *** Record Logs ***
+                    addTradeLog(
+                        'SELL',
+                        token.symbol,
+                        token.id,
+                        quote.inAmount,
+                        sellPrice,
+                        Number(profitInLamports) / 1e9
+                    );
                 } catch (err) {
                     console.error(
                         `❌ Sell failed for ${token?.symbol}:`,
@@ -611,7 +640,7 @@ app.post('/login', async (req, res) => {
         });
     } catch (err) {
         console.log(err);
-        
+
         return res.status(500).json({
             message: 'Internal server error!',
             error: err.message,
@@ -622,11 +651,16 @@ app.post('/login', async (req, res) => {
 app.post('/logout', async (req, res) => {
     req.session.destroy((err) => {
         if (err) {
-            return res.status(500).json({ message: "Error logging out" });
+            return res.status(500).json({ message: 'Error logging out' });
         }
-        res.clearCookie("connect.sid"); // Clear the session cookie
-        return res.json({ status: 200, message: "Logged out successfully" });
+        res.clearCookie('connect.sid'); // Clear the session cookie
+        return res.json({ status: 200, message: 'Logged out successfully' });
     });
+});
+
+// API to fetch logs
+app.get('/getTradeLogs', (req, res) => {
+    return res.json(tradeLogs);
 });
 
 app.listen(PORT, () => {
