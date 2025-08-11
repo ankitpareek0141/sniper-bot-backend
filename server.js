@@ -21,12 +21,12 @@ import { isLaunchpadBlacklisted } from './helper/checkBlacklistLaunchpad.js';
 import { tradeLogs, addTradeLog } from './helper/tradeLogs.js';
 
 const app = express();
-app.use(cors({
-    origin: "http://srv951924.hstgr.cloud:4173",
-    methods: ["GET", "POST", "PUT", "DELETE"],
-    credentials: true
-}));
 app.use(express.json());
+app.use(cors({
+    origin: "*",
+    // methods: ["GET", "POST", "PUT", "DELETE"],
+    // credentials: true
+}));
 
 // Secret for JWT
 const PORT = process.env.PORT || 3001;
@@ -666,6 +666,12 @@ app.post('/logout', async (req, res) => {
 app.get('/getTradeLogs', (req, res) => {
     return res.json(tradeLogs);
 });
+
+// Testing API
+app.get('/test', (req, res) => {
+  res.json({ message: 'Hello from backend' });
+});
+
 
 app.listen(PORT, '0.0.0.0', () => console.log('Server running...'));
 
