@@ -21,7 +21,11 @@ import { isLaunchpadBlacklisted } from './helper/checkBlacklistLaunchpad.js';
 import { tradeLogs, addTradeLog } from './helper/tradeLogs.js';
 
 const app = express();
-app.use(cors());
+app.use(cors({
+    origin: "http://srv951924.hstgr.cloud:4173",
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    credentials: true
+}));
 app.use(express.json());
 
 // Secret for JWT
