@@ -13,26 +13,33 @@ import {
     VersionedTransaction,
 } from '@solana/web3.js';
 import { createWalletFromPrivateKey } from './helper/createWallet.js';
-import { getAllProxies } from './getAllProxies.js';
+import { getAllProxies } from './helper/getAllProxies.js';
 import { config } from './config/botConfig.js';
 import { validateConfigInput } from './config/validateConfig.js';
 import { tradeStats } from './helper/tradeStats.js';
 import { isLaunchpadBlacklisted } from './helper/checkBlacklistLaunchpad.js';
 import { tradeLogs, addTradeLog } from './helper/tradeLogs.js';
+import { calculateNetBuyAmountInSOL, calculateNetSellSolAmount } from './helper/calculateFee.js';
 
-const app = express();
-app.use(express.json());
-app.use(cors({
-    origin: "http://srv951924.hstgr.cloud:4173",
-    methods: ["GET", "POST", "PUT", "DELETE"],
-    credentials: true
-}));
-
-// Secret for JWT
 const PORT = process.env.PORT || 3001;
 const EMAIL = process.env.EMAIL;
 const PASS = process.env.PASS;
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_session_key_here';
+
+const app = express();
+app.use(express.json());
+app.use(
+    cors({
+        origin:
+            process.env.NODE_ENV == 'dev'
+                ? `http://localhost:5173`
+                : 'http://srv951924.hstgr.cloud:4173',
+        methods: ['GET', 'POST', 'PUT', 'DELETE'],
+        credentials: true,
+    })
+);
+
+// Secret for JWT
 
 // Session middleware
 app.use(
@@ -206,7 +213,7 @@ async function fetchSwapTransaction(quote, walletPubkey, index) {
     // return await response.json();
 }
 
-async function swapToken(quoteArray, wallet, connection) {  
+async function swapToken(quoteArray, wallet, connection) {
     console.log('Buy Swap Calling...');
 
     for (let index = 0; index < quoteArray.length; index++) {
@@ -269,14 +276,24 @@ async function swapToken(quoteArray, wallet, connection) {
                 `✅ *** Buy *** txn for ${token.symbol}, TXID: ${txid}`
             );
 
+            
+            const buySolAmount = Number(quote.inAmount) / 10 ** 9; // lamports → SOL
+            const buyTokenAmount =
+            Number(quote.outAmount) / 10 ** Number(token.decimals); // adjust decimals
+            const buyPrice = buySolAmount / buyTokenAmount;
+            
+            // Add Fee calculation logic
+            const netBuyAmount = calculateNetBuyAmountInSOL(
+                quote,
+                buyPrice,
+                BigInt(swapResponse.prioritizationFeeLamports),
+                Number(token.decimals)
+            );
+
             tradeStats.successfulBuys++;
             // tradeStats.totalTrades++;
             tradeStats.totalBuyingAmount =
-                BigInt(tradeStats.totalBuyingAmount) + BigInt(quote.inAmount);
-
-            const buySolAmount = Number(quote.inAmount) / 10 ** 9; // lamports → SOL
-            const buyTokenAmount = Number(quote.outAmount) / 10 ** Number(token.decimals); // adjust decimals
-            const buyPrice = buySolAmount / buyTokenAmount;
+                BigInt(tradeStats.totalBuyingAmount) + netBuyAmount;
 
             // *** Record Logs ***
             addTradeLog(
@@ -347,11 +364,25 @@ async function swapToken(quoteArray, wallet, connection) {
                         `💰 *** SELL *** txn for ${token.symbol}, TXID: ${sellTxid}`
                     );
 
-                    // console.log("Buy Amount := ", quote.inAmount, "          Sell Amount := ", sellQuote.quote.outAmount);
+                    tradeStats.successfulSells++;
+                    tradeStats.totalTrades++;
+
+                    const sellTokenAmount =
+                        Number(quote.inAmount) / 10 ** Number(token.decimals); // lamports → SOL
+                    const sellSolAmount = Number(quote.outAmount) / 10 ** 9; // adjust decimals
+                    const sellPrice = sellSolAmount / sellTokenAmount;
+
+                    const netSellAmount = calculateNetSellSolAmount(
+                        BigInt(sellQuote.quote.outAmount),
+                        BigInt(sellTxData.prioritizationFeeLamports)
+                    );
+
+                    tradeStats.totalSellingAmount =
+                        BigInt(tradeStats.totalSellingAmount) +
+                        BigInt(netSellAmount)
 
                     const profitInLamports =
-                        BigInt(sellQuote.quote.outAmount) -
-                        BigInt(quote.inAmount);
+                        netSellAmount - netBuyAmount
 
                     if (profitInLamports > 0n) {
                         tradeStats.successfulTrades++;
@@ -359,15 +390,6 @@ async function swapToken(quoteArray, wallet, connection) {
                     console.log(
                         `Profit: ${Number(profitInLamports) / 1e9} SOL`
                     );
-                    tradeStats.totalSellingAmount =
-                        BigInt(tradeStats.totalSellingAmount) +
-                        BigInt(sellQuote.quote.outAmount);
-                    tradeStats.successfulSells++;
-                    tradeStats.totalTrades++;
-
-                    const sellTokenAmount  = Number(quote.inAmount) / 10 ** Number(token.decimals); // lamports → SOL
-                    const sellSolAmount = Number(quote.outAmount) / 10 ** 9; // adjust decimals
-                    const sellPrice = sellSolAmount / sellTokenAmount;
 
                     // *** Record Logs ***
                     addTradeLog(
@@ -404,9 +426,9 @@ let botLoopTimeoutId = null; // 🆕 Track setTimeout
 
 // This is the main bot function which triggered by the '/start-sniper-bot' API and then starts trading
 async function startBotForever() {
-    console.log(
-        `[${new Date().toLocaleTimeString()}] >>> StartBotForever called`
-    );
+    // console.log(
+    //     `[${new Date().toLocaleTimeString()}] >>> StartBotForever called`
+    // );
 
     // setInterval(async () => {
     // if (!botActive) return;
@@ -449,8 +471,6 @@ async function startBotForever() {
             }
         }
 
-        console.log('Filtered Tokens ========> ', newTokens.length);
-
         // ⏸️ First-time delay
         if (isFirstRun && newTokens.length > 0) {
             console.log('⏸️ First run: waiting 3 seconds before quoting...');
@@ -467,6 +487,8 @@ async function startBotForever() {
         }
 
         if (newTokens.length) {
+            console.log('New Tokens Arrived ========> ', newTokens.length);
+
             // Genereate Quote Tokens ( SOL ----> Token )
             const buyQuoteResult = await getQuote(
                 config.inputMint,
@@ -669,9 +691,9 @@ app.get('/getTradeLogs', (req, res) => {
 
 // Testing API
 app.get('/test', (req, res) => {
-  res.json({ message: 'Hello from backend' });
+    res.json({ message: 'Hello from backend' });
 });
 
-
-app.listen(PORT, '0.0.0.0', () => console.log('Server running...'));
-
+app.listen(PORT, '0.0.0.0', () =>
+    console.log(`Server running on PORT: ${PORT} `)
+);
