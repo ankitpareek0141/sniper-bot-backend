@@ -18,8 +18,11 @@ import { config } from './config/botConfig.js';
 import { validateConfigInput } from './config/validateConfig.js';
 import { tradeStats } from './helper/tradeStats.js';
 import { isLaunchpadBlacklisted } from './helper/checkBlacklistLaunchpad.js';
-import { tradeLogs, addTradeLog } from './helper/tradeLogs.js';
-import { calculateNetBuyAmountInSOL, calculateNetSellSolAmount } from './helper/calculateFee.js';
+import { tradeLogs, addTradeLog, recordLog } from './helper/tradeLogs.js';
+import {
+    calculateNetBuyAmountInSOL,
+    calculateNetSellSolAmount,
+} from './helper/calculateFee.js';
 
 const PORT = process.env.PORT || 3001;
 const EMAIL = process.env.EMAIL;
@@ -61,6 +64,7 @@ let connection = new Connection(
     'confirmed'
 );
 const knownTokens = new Set();
+const backlistedTokenOwners = new Set();
 let proxies;
 let wallet;
 
@@ -276,12 +280,11 @@ async function swapToken(quoteArray, wallet, connection) {
                 `✅ *** Buy *** txn for ${token.symbol}, TXID: ${txid}`
             );
 
-            
             const buySolAmount = Number(quote.inAmount) / 10 ** 9; // lamports → SOL
             const buyTokenAmount =
-            Number(quote.outAmount) / 10 ** Number(token.decimals); // adjust decimals
+                Number(quote.outAmount) / 10 ** Number(token.decimals); // adjust decimals
             const buyPrice = buySolAmount / buyTokenAmount;
-            
+
             // Add Fee calculation logic
             const netBuyAmount = calculateNetBuyAmountInSOL(
                 quote,
@@ -296,14 +299,16 @@ async function swapToken(quoteArray, wallet, connection) {
                 BigInt(tradeStats.totalBuyingAmount) + netBuyAmount;
 
             // *** Record Logs ***
-            addTradeLog(
-                'BUY',
-                token.symbol,
-                token.id,
-                quote.inAmount,
-                buyPrice,
-                0
-            );
+            // addTradeLog(
+            //     'BUY',
+            //     token.symbol,
+            //     token.id,
+            //     quote.inAmount,
+            //     buyPrice,
+            //     0
+            // );
+
+            recordLog("BUY", token.symbol, token.id, netBuyAmount);
 
             // ****** Schedule Re-sell after delay (sellTimer) ******
             setTimeout(async () => {
@@ -330,6 +335,9 @@ async function swapToken(quoteArray, wallet, connection) {
                         console.log(
                             `❌ Could not get sell quote for ${token.symbol}, Liq ${token.liquidity}`
                         );
+                        
+                        recordLog("SELL", token.symbol, token.id, netBuyAmount, 0, true);
+                        
                         tradeStats.failedSells++;
                         tradeStats.failedTrades++;
                         return;
@@ -379,10 +387,9 @@ async function swapToken(quoteArray, wallet, connection) {
 
                     tradeStats.totalSellingAmount =
                         BigInt(tradeStats.totalSellingAmount) +
-                        BigInt(netSellAmount)
+                        BigInt(netSellAmount);
 
-                    const profitInLamports =
-                        netSellAmount - netBuyAmount
+                    const profitInLamports = netSellAmount - netBuyAmount;
 
                     if (profitInLamports > 0n) {
                         tradeStats.successfulTrades++;
@@ -392,22 +399,28 @@ async function swapToken(quoteArray, wallet, connection) {
                     );
 
                     // *** Record Logs ***
-                    addTradeLog(
-                        'SELL',
-                        token.symbol,
-                        token.id,
-                        quote.inAmount,
-                        sellPrice,
-                        Number(profitInLamports) / 1e9
-                    );
+                    recordLog("SELL", token.symbol, token.id, netBuyAmount, netSellAmount);
+
+                    // addTradeLog(
+                    //     'SELL',
+                    //     token.symbol,
+                    //     token.id,
+                    //     quote.inAmount,
+                    //     sellPrice,
+                    //     Number(profitInLamports) / 1e9
+                    // );
                 } catch (err) {
                     console.error(
                         `❌ Sell failed for ${token?.symbol}:`,
                         err.message
                     );
-                    console.log('Full Error Details := ', err);
+                    console.log('Sell Error Details := ', err);
+                    
+                    backlistedTokenOwners.add(token.dev);
                     tradeStats.failedSells++;
                     tradeStats.failedTrades++;
+                    
+                    recordLog("SELL", token.symbol, token.id, netBuyAmount, 0, true);
                 }
             }, config.sellTimer * 1000); // Delay in ms
             // ******** Reswap logic **********
@@ -458,6 +471,7 @@ async function startBotForever() {
         for (const token of tokens) {
             if (
                 !knownTokens.has(token.id) &&
+                !backlistedTokenOwners.has(token.dev) &&
                 token.liquidity &&
                 token.liquidity >= config.minLiquidity && // Check for min liquidity
                 token?.audit?.topHoldersPercentage &&
@@ -621,10 +635,10 @@ app.get('/getStats', async (req, res) => {
             ...tradeStats,
             totalBuyingAmount: (
                 Number(tradeStats.totalBuyingAmount) / LAMPORTS_PER_SOL
-            ).toFixed(4),
+            ).toFixed(9),
             totalSellingAmount: (
                 Number(tradeStats.totalSellingAmount) / LAMPORTS_PER_SOL
-            ).toFixed(4),
+            ).toFixed(9),
             totalProfit: (
                 Number(tradeStats.totalProfit) / LAMPORTS_PER_SOL
             ).toFixed(9),

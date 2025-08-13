@@ -1,3 +1,5 @@
+import { tradeLogs } from "./tradeLogs.js";
+
 export const tradeStats = {
     totalTrades: 0,
     successfulTrades: 0,
@@ -17,8 +19,44 @@ export const tradeStats = {
             : '0.00%';
     },
 
+    get rugPull() { 
+        return this.totalTrades > 0
+            ? ((this.failedTrades / this.totalTrades) * 100).toFixed(2) + '%'
+            : '0.00%';
+    },
+
     get totalProfit() { 
-        return (BigInt(this.totalSellingAmount) - BigInt(this.totalBuyingAmount));  ``
+        return (BigInt(this.totalSellingAmount) - BigInt(this.totalBuyingAmount));  
+    },
+
+    get avgGrowth() {
+        
+        let totalGrowthPercent = 0; // For winning trades
+        
+        for (const log of tradeLogs) {
+            
+            const profitInSol = Number(log.profitLoss) / 1e9
+            const growthPercentage = profitInSol / (Number(log.buyAmount) / 1e9) * 100 ;
+
+            if(profitInSol > 0) totalGrowthPercent += growthPercentage;
+        }
+
+        return this.successfulTrades ? (totalGrowthPercent / this.successfulTrades).toFixed(2) : 0;
+    },
+
+    get avgLoss() {
+        
+        let totalLossPercent = 0; // For winning trades
+        
+        for (const log of tradeLogs) {
+            
+            const profitInSol = Number(log.profitLoss) / 1e9
+            const growthPercentage = profitInSol / (Number(log.buyAmount) / 1e9) * 100 ;
+
+            if(profitInSol < 0) totalLossPercent += Math.abs(growthPercentage);
+        }
+        
+        return this.failedTrades ? (totalLossPercent / this.failedTrades).toFixed(2) : 0;
     },
 
     logSummary() {
@@ -36,3 +74,5 @@ export const tradeStats = {
         console.log('===============================\n');
     },
 };
+
+
